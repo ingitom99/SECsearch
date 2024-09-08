@@ -1,0 +1,8 @@
+streamlit
+requests
+llama-index
+llama-index-llms-openai
+llama-index-embeddings-openai
+llama-index-vector-stores-chroma
+python-dotenv
+chromadb
