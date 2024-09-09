@@ -3,15 +3,15 @@ import os
 import requests
 
 
-def get_user_agent_string(first_name: str, last_name: str,
-                          email: str) -> str:
+def make_user_agent_string(first_name: str, last_name: str,
+                           email: str) -> str:
     """
     Make string of personal info necessary for getting data from sec website.
     """
 
     return f'{first_name} {last_name} ({email})'
 
- 
+
 def get_company_identifiers(
         user_agent_string: str,
         save_path: str = './data/sec/companies.json'
@@ -27,11 +27,11 @@ def get_company_identifiers(
         'User-Agent': user_agent_string
     }
 
-    response = requests.get(url, headers=headers)
+    response = requests.get(url, headers=headers, timeout=10)
 
     if response.status_code == 200:
         result_dict = response.json()
-        print(f"Successfully retrieved data for {len(result_dict)} companies.")
+        
         companies = []
         for value in result_dict.values():
             company_dict = {}
@@ -43,9 +43,11 @@ def get_company_identifiers(
         if save_path is not None:
             with open(save_path, "w", encoding="utf-8") as f:
                 json.dump(companies, f, indent=4)
-        
+
+        print(f"Successfully retrieved data for {len(result_dict)} companies.")
+
         return companies
-    
+
     print(f"Failed to retrieve data. Status code: {response.status_code}")
     return None
 
@@ -59,7 +61,12 @@ def get_cik_from_ticker(ticker: str, companies: list[dict[str, str]]
 
     for company in companies:
         if company['ticker'] == ticker:
+            print(
+                f"Successfully retrieved CIK: {company['cik']} for "
+                f"ticker: {ticker}"
+            )
             return company['cik']
+ 
     return None
 
 
@@ -76,6 +83,7 @@ def get_raw_data(user_agent_string: str, cik: str) -> dict | None:
 
     if response.status_code == 200:
         data = response.json()
+        print("Successfully retrieved data for CIK: {cik}")
         return data
 
     print(f"Error: {response.status_code}")
@@ -84,15 +92,15 @@ def get_raw_data(user_agent_string: str, cik: str) -> dict | None:
 
 def get_tags(company_data: dict) -> dict[str, list[str]]:
     """
-    Get the tags from the raw company filing data.
+    Get the filing concepts from the raw company filing data.
     """
 
     taxonomies = list(company_data['facts'].keys())
-    all_tags = {}
+    tags = {}
     for taxonomy in taxonomies:
-        all_tags[taxonomy] = list(company_data['facts'][taxonomy].keys())
+        tags[taxonomy] = list(company_data['facts'][taxonomy].keys())
 
-    return all_tags
+    return tags
 
 
 def make_fact(
@@ -108,20 +116,24 @@ def make_fact(
     Make a filing fact in the form of a full sentence from filing info.
     """
 
-    clean_tag = ''.join(
+    concept = ''.join(
         [' ' + char if char.isupper() else char for char in tag]
         ).strip()
     if fiscal_period == 'FY':
         fiscal_period = 'Full Year'
     formatted_value = f"{value:,}"
     fact = (
-        f"The reported '{clean_tag}' in {fiscal_year} ({fiscal_period}) "
+        f"The reported '{concept}' in {fiscal_year} ({fiscal_period}) "
         f"filed in a {form_type} form on {date_filed} was {formatted_value} "
         f"{unit}."
     )
     return fact
 
-def get_data_by_tag(company_data: dict, tag: str, taxonomy: str) -> dict:
+
+def make_concept_info(company_data: dict, tag: str, taxonomy: str) -> dict:
+    """
+    Create a dict containing all the information filed about a concept.
+    """
 
     concept = {}
     concept['tag'] = tag
@@ -153,40 +165,51 @@ def get_data_by_tag(company_data: dict, tag: str, taxonomy: str) -> dict:
 
     return concept
 
-def get_all_data(company_data : dict, all_tags : dict) -> dict:
-    facts = {}
+
+def make_concept_filings(company_data: dict, all_tags: dict) -> dict:
+    """
+    Create a dict containing all the filed information sorted by concept (tag).
+    """
+
+    concept_filings = {}
     for taxonomy, tags_list in all_tags.items():
         for tag in tags_list:
-            fact = get_data_by_tag(company_data, tag, taxonomy)
-            facts[tag] = fact
-    return facts
+            concept = make_concept_info(company_data, tag, taxonomy)
+            concept_filings[tag] = concept
+
+    return concept_filings
 
 
-def get_all_data_for_ticker(
-        ticker : str,
-        save_dir : str = './data/sec/filings'):
-    user_agent_string = get_user_agent_string(
-        "Ingimar",
-        "Tomasson",
-        "ingitom99@gmail.com"
-    )
-    cik_map = get_cik_ticker_map(user_agent_string)
-    cik = get_cik_from_ticker(ticker, cik_map)
-    company_data = get_raw_data(user_agent_string, cik)
-    all_tags = get_tags(company_data)
-    all_data = get_all_data(company_data, all_tags)
-    
-    # Ensure the data directory and ticker subdirectory exist
-    os.makedirs(f"./data/{ticker}", exist_ok=True)
+def get_filings_from_ticker(
+        ticker: str,
+        first_name: str = "Ingimar",
+        last_name: str = "Tomasson",
+        email: str = "ingitom99@gmail.com",
+        save_path: str = "./data/sec/filings"
+) -> dict:
+    """
+    Get the filings for a company identified by its ticker.
+    """
 
-    # Create the file path
-    file_path = save_dir + f"/{ticker}.json"
+    user_agent_string = make_user_agent_string(first_name, last_name, email)
+    companies = get_company_identifiers(user_agent_string)
+    cik = get_cik_from_ticker(ticker, companies)
+    if cik is None:
+        raise ValueError(f"CIK not found for ticker: {ticker}")
+    raw_data = get_raw_data(user_agent_string, cik)
+    if raw_data is None:
+        raise ValueError(f"Failed to retrieve raw data for CIK: {cik}")
+    tags = get_tags(raw_data)
+    concept_filings = make_concept_filings(raw_data, tags)
 
-    # Save the data to a JSON file
-    with open(file_path, "w") as f:
-        json.dump(all_data, f, indent=4)
+    os.makedirs(save_path, exist_ok=True)
 
-    # Verify that the file was created
+    file_path = os.path.join(save_path, f"{ticker}.json")
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(concept_filings, f, indent=4)
+
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Failed to create file: {file_path}")
-    return None
+
+    return concept_filings
